@@ -60,6 +60,7 @@ var WebView = React.createClass({
     automaticallyAdjustContentInsets: PropTypes.bool,
     contentInset: EdgeInsetsPropType,
     onNavigationStateChange: PropTypes.func,
+    onMessage: PropTypes.func,
     startInLoadingState: PropTypes.bool, // force WebView to show loadingView on first load
     style: View.propTypes.style,
 
@@ -223,6 +224,8 @@ var WebView = React.createClass({
         userAgent={this.props.userAgent}
         javaScriptEnabled={this.props.javaScriptEnabled}
         domStorageEnabled={this.props.domStorageEnabled}
+        messagingEnabled={typeof this.props.onMessage === 'function'}
+        onMessage={this.onMessage}
         contentInset={this.props.contentInset}
         automaticallyAdjustContentInsets={this.props.automaticallyAdjustContentInsets}
         onLoadingStart={this.onLoadingStart}
@@ -272,6 +275,14 @@ var WebView = React.createClass({
     );
   },
 
+  postMessage = (data) => {
+    UIManager.dispatchViewManagerCommand(
+      this.getWebViewHandle(),
+      UIManager.RCTWebView.Commands.postMessage,
+      [String(data)]
+    );
+  };
+
   /**
    * We return an event with a bunch of fields including:
    *  url, title, loading, canGoBack, canGoForward
@@ -313,10 +324,19 @@ var WebView = React.createClass({
       viewState: WebViewState.IDLE,
     });
     this.updateNavigationState(event);
+  };
+
+  onMessage = (event: Event) => {
+    var {onMessage} = this.props;
+    onMessage && onMessage(event);
+  }
+}
+
+var RCTWebView = requireNativeComponent('RCTWebView', WebView, {
+  nativeOnly: {
+    messagingEnabled: PropTypes.bool,
   },
 });
-
-var RCTWebView = requireNativeComponent('RCTWebView', WebView);
 
 var styles = StyleSheet.create({
   container: {

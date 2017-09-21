@@ -20,6 +20,7 @@
 #import "UIView+React.h"
 
 NSString *const RCTJSNavigationScheme = @"react-js-navigation";
+NSString *const RCTJSPostMessageHost = @"postMessage";
 
 @interface RCTWebView () <UIWebViewDelegate, RCTAutoInsetsProtocol>
 
@@ -27,6 +28,7 @@ NSString *const RCTJSNavigationScheme = @"react-js-navigation";
 @property (nonatomic, copy) RCTDirectEventBlock onLoadingFinish;
 @property (nonatomic, copy) RCTDirectEventBlock onLoadingError;
 @property (nonatomic, copy) RCTDirectEventBlock onShouldStartLoadWithRequest;
+@property (nonatomic, copy) RCTDirectEventBlock onMessage;
 
 @end
 
@@ -80,6 +82,18 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
 - (void)stopLoading
 {
   [_webView stopLoading];
+}
+
+- (void)postMessage:(NSString *)message
+{
+  NSDictionary *eventInitDict = @{
+    @"data": message,
+  };
+  NSString *source = [NSString
+    stringWithFormat:@"document.dispatchEvent(new MessageEvent('message', %@));",
+    RCTJSONStringify(eventInitDict, NULL)
+  ];
+  [_webView stringByEvaluatingJavaScriptFromString:source];
 }
 
 - (void)setSource:(NSDictionary *)source
@@ -221,6 +235,23 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
     }
   }
 
+  if (isJSNavigation && [request.URL.host isEqualToString:RCTJSPostMessageHost]) {
+    NSString *data = request.URL.query;
+    data = [data stringByReplacingOccurrencesOfString:@"+" withString:@" "];
+    data = [data stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+
+    NSMutableDictionary<NSString *, id> *event = [self baseEvent];
+    [event addEntriesFromDictionary: @{
+      @"data": data,
+    }];
+
+    NSString *source = @"document.dispatchEvent(new MessageEvent('message:received'));";
+
+    [_webView stringByEvaluatingJavaScriptFromString:source];
+
+    _onMessage(event);
+  }
+
   // JS Navigation handler
   return !isJSNavigation;
 }
@@ -248,6 +279,44 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
 
 - (void)webViewDidFinishLoad:(UIWebView *)webView
 {
+  if (_messagingEnabled) {
+    #if RCT_DEV
+    // See isNative in lodash
+    NSString *testPostMessageNative = @"String(window.postMessage) === String(Object.hasOwnProperty).replace('hasOwnProperty', 'postMessage')";
+    BOOL postMessageIsNative = [
+      [webView stringByEvaluatingJavaScriptFromString:testPostMessageNative]
+      isEqualToString:@"true"
+    ];
+    if (!postMessageIsNative) {
+      RCTLogError(@"Setting onMessage on a WebView overrides existing values of window.postMessage, but a previous value was defined");
+    }
+    #endif
+    NSString *source = [NSString stringWithFormat:
+      @"(function() {"
+        "window.originalPostMessage = window.postMessage;"
+
+        "var messageQueue = [];"
+        "var messagePending = false;"
+
+        "function processQueue() {"
+          "if (!messageQueue.length || messagePending) return;"
+          "messagePending = true;"
+          "window.location = '%@://%@?' + encodeURIComponent(messageQueue.shift());"
+        "}"
+
+        "window.postMessage = function(data) {"
+          "messageQueue.push(String(data));"
+          "processQueue();"
+        "};"
+
+        "document.addEventListener('message:received', function(e) {"
+          "messagePending = false;"
+          "processQueue();"
+        "});"
+      "})();", RCTJSNavigationScheme, kPostMessageHost
+    ];
+    [webView stringByEvaluatingJavaScriptFromString:source];
+  }
   if (_injectedJavaScript != nil) {
     NSString *jsEvaluationValue = [webView stringByEvaluatingJavaScriptFromString:_injectedJavaScript];
 
